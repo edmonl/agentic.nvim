@@ -1,4 +1,6 @@
 local Config = require("agentic.config")
+local DiagnosticsContext = require("agentic.ui.diagnostics_context")
+local WidgetLayout = require("agentic.ui.widget_layout")
 local FileSystem = require("agentic.utils.file_system")
 local BufHelpers = require("agentic.utils.buf_helpers")
 
@@ -42,7 +44,6 @@ end
 --- Add a diagnostic to the list if not already present
 --- @param diagnostic agentic.ui.DiagnosticsList.Diagnostic|nil
 --- @return boolean success
---- @private
 function DiagnosticsList:_add_no_render(diagnostic)
     if not diagnostic or not diagnostic.bufnr then
         return false
@@ -188,7 +189,8 @@ function DiagnosticsList.get_diagnostics_at_cursor(bufnr, opts)
     local diagnostics = {}
 
     for _, d in ipairs(vim_diagnostics) do
-        if d.lnum == cursor_line then
+        local end_lnum = d.end_lnum or d.lnum
+        if cursor_line >= d.lnum and cursor_line <= end_lnum then
             --- @type agentic.ui.DiagnosticsList.Diagnostic
             local diagnostic =
                 vim.tbl_extend("force", d, { file_path = file_path }) --[[@as agentic.ui.DiagnosticsList.Diagnostic]]
@@ -203,6 +205,12 @@ end
 function DiagnosticsList:_render()
     local lines = {}
     local icons = get_diagnostic_icons()
+
+    local buf_width = WidgetLayout.calculate_width(Config.windows.width)
+    local winid = vim.fn.bufwinid(self._bufnr)
+    if winid ~= -1 then
+        buf_width = vim.api.nvim_win_get_width(winid)
+    end
 
     for _, diagnostic in ipairs(self._diagnostics) do
         local icon = icons[diagnostic.severity]
@@ -229,7 +237,10 @@ function DiagnosticsList:_render()
 
         -- Format: ICON path:line:col - message
         local line = string.format("%s %s - %s", icon, location, message)
-        table.insert(lines, line)
+        table.insert(
+            lines,
+            DiagnosticsContext.truncate_for_display(line, buf_width)
+        )
     end
 
     local did_render = BufHelpers.with_modifiable(self._bufnr, function(bufnr)
