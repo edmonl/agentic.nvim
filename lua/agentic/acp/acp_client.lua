@@ -1,6 +1,5 @@
 local Logger = require("agentic.utils.logger")
 local transport_module = require("agentic.acp.acp_transport")
-local FileSystem = require("agentic.utils.file_system")
 
 --[[
 CRITICAL: Type annotations in this file are essential for Lua Language Server support.
@@ -20,6 +19,7 @@ local KNOWN_ACP_KINDS = {
     fetch = true,
     other = true,
     create = true,
+    write = true,
     switch_mode = true,
 }
 
@@ -70,8 +70,8 @@ function ACPClient:new(config, on_ready)
         },
         capabilities = {
             fs = {
-                readTextFile = true,
-                writeTextFile = true,
+                readTextFile = false,
+                writeTextFile = false,
             },
             terminal = false,
         },
@@ -288,10 +288,10 @@ function ACPClient:_handle_notification(message_id, method, params)
     elseif method == "session/request_permission" then
         --- @diagnostic disable-next-line: param-type-mismatch
         self:__handle_request_permission(message_id, params)
-    elseif method == "fs/read_text_file" then
-        self:_handle_read_text_file(message_id, params)
-    elseif method == "fs/write_text_file" then
-        self:_handle_write_text_file(message_id, params)
+    elseif method == "fs/read_text_file" or method == "fs/write_text_file" then
+        Logger.debug(
+            string.format("Received '%s' notification, ignoring it", method)
+        )
     else
         Logger.notify("Unknown notification method: " .. method)
     end
@@ -456,50 +456,6 @@ function ACPClient:__handle_request_permission(message_id, request)
                     },
                 }
             )
-        end)
-    end)
-end
-
---- @param message_id number
---- @param params table
-function ACPClient:_handle_read_text_file(message_id, params)
-    local session_id = params.sessionId
-    local path = params.path
-
-    if not session_id or not path then
-        Logger.notify("Received fs/read_text_file without sessionId or path")
-        return
-    end
-
-    self:__with_subscriber(session_id, function()
-        FileSystem.read_file(
-            path,
-            params.line ~= vim.NIL and params.line or nil,
-            params.limit ~= vim.NIL and params.limit or nil,
-            function(content)
-                self:__send_result(message_id, { content = content })
-            end
-        )
-    end)
-end
-
---- @param message_id number
---- @param params table
-function ACPClient:_handle_write_text_file(message_id, params)
-    local session_id = params.sessionId
-    local path = params.path
-    local content = params.content
-
-    if not session_id or not path or not content then
-        Logger.notify(
-            "Received fs/write_text_file without sessionId, path, or content"
-        )
-        return
-    end
-
-    self:__with_subscriber(session_id, function()
-        FileSystem.write_file(path, content, function(error)
-            self:__send_result(message_id, error == nil and vim.NIL or error)
         end)
     end)
 end
@@ -760,6 +716,7 @@ return ACPClient
 --- | "SubAgent"
 --- | "other"
 --- | "create"
+--- | "write"
 --- | "Skill"
 --- | "switch_mode"
 
