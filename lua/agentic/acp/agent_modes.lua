@@ -1,31 +1,20 @@
 --- Manages agent modes for ACP sessions
 --- Provides mode selection via vim.ui.select
 
-local BufHelpers = require("agentic.utils.buf_helpers")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.acp.AgentModes
 --- @field _modes agentic.acp.AgentMode[]
---- @field _set_mode_callback fun(mode_id: string) called when the user selects a new mode from the selector
 --- @field current_mode_id? string
 local AgentModes = {}
 AgentModes.__index = AgentModes
 
 --- @return agentic.acp.AgentModes
---- @param buffers agentic.ui.ChatWidget.BufNrs Same buffers as ChatWidget instance
---- @param set_mode_callback fun(mode_id: string) Callback to change mode via SessionManager
-function AgentModes:new(buffers, set_mode_callback)
+function AgentModes:new()
     local instance = setmetatable({
         _modes = {},
-        _set_mode_callback = set_mode_callback,
         current_mode_id = nil,
     }, self)
-
-    for _, bufnr in pairs(buffers) do
-        BufHelpers.keymap_set(bufnr, { "n", "v", "i" }, "<S-Tab>", function()
-            instance:show_mode_selector()
-        end, { desc = "Agentic: Select Agent Mode" })
-    end
 
     return instance
 end
@@ -48,9 +37,11 @@ function AgentModes:get_mode(mode_id)
     return nil
 end
 
-function AgentModes:show_mode_selector()
+--- @param set_mode_callback fun(mode_id: string)
+--- @return boolean shown
+function AgentModes:show_mode_selector(set_mode_callback)
     if #self._modes == 0 then
-        return
+        return false
     end
 
     vim.ui.select(self._modes, {
@@ -70,14 +61,22 @@ function AgentModes:show_mode_selector()
         end,
     }, function(selected_mode)
         if selected_mode and selected_mode.id ~= self.current_mode_id then
-            self._set_mode_callback(selected_mode.id)
+            set_mode_callback(selected_mode.id)
         end
     end)
+
+    return true
 end
 
 --- @param mode_id string|nil
 --- @return boolean success true if mode was updated, false if invalid mode_id
-function AgentModes:update_mode(mode_id)
+function AgentModes:handle_agent_update_mode(mode_id)
+    if #self._modes == 0 then
+        -- Providers that support both, legacy modes and configOptions modes will send an update
+        -- ignoring it to avoid double handling the event
+        return false
+    end
+
     if not mode_id or not self:get_mode(mode_id) then
         Logger.notify(
             string.format(
@@ -100,6 +99,12 @@ function AgentModes:update_mode(mode_id)
     )
 
     return true
+end
+
+--- Reset all modes and current selection
+function AgentModes:clear()
+    self._modes = {}
+    self.current_mode_id = nil
 end
 
 return AgentModes

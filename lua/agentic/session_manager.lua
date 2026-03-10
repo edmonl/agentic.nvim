@@ -7,15 +7,11 @@
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
-local DiagnosticsContext = require("agentic.ui.diagnostics_context")
 local DiffPreview = require("agentic.ui.diff_preview")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
-local SessionRestore = require("agentic.session_restore")
 local SlashCommands = require("agentic.acp.slash_commands")
-local TodoList = require("agentic.ui.todo_list")
-local WidgetLayout = require("agentic.ui.widget_layout")
 
 --- @class agentic._SessionManagerPrivate
 local P = {}
@@ -61,7 +57,7 @@ end
 --- @field file_list agentic.ui.FileList
 --- @field code_selection agentic.ui.CodeSelection
 --- @field diagnostics_list agentic.ui.DiagnosticsList
---- @field agent_modes agentic.acp.AgentModes
+--- @field config_options agentic.acp.AgentConfigOptions
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
@@ -87,13 +83,14 @@ end
 function SessionManager:new(tab_page_id)
     local AgentInstance = require("agentic.acp.agent_instance")
     local ChatWidget = require("agentic.ui.chat_widget")
+    local CodeSelection = require("agentic.ui.code_selection")
+    local FileList = require("agentic.ui.file_list")
+    local FilePicker = require("agentic.ui.file_picker")
     local MessageWriter = require("agentic.ui.message_writer")
     local PermissionManager = require("agentic.ui.permission_manager")
     local StatusAnimation = require("agentic.ui.status_animation")
-    local AgentModes = require("agentic.acp.agent_modes")
-    local FileList = require("agentic.ui.file_list")
-    local CodeSelection = require("agentic.ui.code_selection")
-    local FilePicker = require("agentic.ui.file_picker")
+    local TodoList = require("agentic.ui.todo_list")
+    local AgentConfigOptions = require("agentic.acp.agent_config_options")
 
     self = setmetatable({
         session_id = nil,
@@ -132,9 +129,15 @@ function SessionManager:new(tab_page_id)
     FilePicker:new(self.widget.buf_nrs.input)
     SlashCommands.setup_completion(self.widget.buf_nrs.input)
 
-    self.agent_modes = AgentModes:new(self.widget.buf_nrs, function(mode_id)
-        self:_handle_mode_change(mode_id)
-    end)
+    self.config_options = AgentConfigOptions:new(
+        self.widget.buf_nrs,
+        function(mode_id, is_legacy)
+            self:_handle_mode_change(mode_id, is_legacy)
+        end,
+        function(model_id, is_legacy)
+            self:_handle_model_change(model_id, is_legacy)
+        end
+    )
 
     self.file_list = FileList:new(self.widget.buf_nrs.files, function(file_list)
         if file_list:is_empty() then
@@ -226,9 +229,16 @@ function SessionManager:_on_session_update(update)
             update.availableCommands
         )
     elseif update.sessionUpdate == "current_mode_update" then
-        if self.agent_modes:update_mode(update.currentModeId) then
+        -- only for legacy modes, not for config_options
+        if
+            self.config_options.legacy_agent_modes:handle_agent_update_mode(
+                update.currentModeId
+            )
+        then
             self:_set_mode_to_chat_header(update.currentModeId)
         end
+    elseif update.sessionUpdate == "config_option_update" then
+        self:_handle_new_config_options(update.configOptions)
     elseif update.sessionUpdate == "usage_update" then
         -- Usage updates contain token/cost information - currently informational only
         -- Fields: used (tokens), size (context window), cost (optional: amount, currency)
@@ -294,34 +304,101 @@ end
 
 --- Send the newly selected mode to the agent and handle the response
 --- @param mode_id string
-function SessionManager:_handle_mode_change(mode_id)
+--- @param is_legacy boolean|nil
+function SessionManager:_handle_mode_change(mode_id, is_legacy)
     if not self.session_id then
         return
     end
 
-    self.agent:set_mode(self.session_id, mode_id, function(_result, err)
+    local function callback(result, err)
         if err then
             Logger.notify(
-                "Failed to change mode: " .. err.message,
+                string.format(
+                    "Failed to change mode to '%s': %s",
+                    mode_id,
+                    err.message
+                ),
                 vim.log.levels.ERROR
             )
         else
-            self.agent_modes.current_mode_id = mode_id
+            -- needed for backward compatibility
+            self.config_options.legacy_agent_modes.current_mode_id = mode_id
+
+            if result and result.configOptions then
+                Logger.debug("received result after setting mode")
+                self:_handle_new_config_options(result.configOptions)
+            end
+
             self:_set_mode_to_chat_header(mode_id)
 
-            Logger.notify("Mode changed to: " .. mode_id, vim.log.levels.INFO, {
-                title = "Agentic Mode changed",
-            })
+            local mode_name = self.config_options:get_mode_name(mode_id)
+            Logger.notify(
+                "Mode changed to: " .. mode_name,
+                vim.log.levels.INFO,
+                {
+                    title = "Agentic Mode changed",
+                }
+            )
         end
-    end)
+    end
+
+    if is_legacy then
+        self.agent:set_mode(self.session_id, mode_id, callback)
+    else
+        self.agent:set_config_option(self.session_id, "mode", mode_id, callback)
+    end
+end
+
+--- Send the newly selected model to the agent
+--- @param model_id string
+--- @param is_legacy boolean|nil
+function SessionManager:_handle_model_change(model_id, is_legacy)
+    if not self.session_id then
+        return
+    end
+
+    local callback = function(result, err)
+        if err then
+            Logger.notify(
+                string.format(
+                    "Failed to change model to '%s': %s",
+                    model_id,
+                    err.message
+                ),
+                vim.log.levels.ERROR
+            )
+        else
+            if result and result.configOptions then
+                Logger.debug("received result after setting model")
+                self:_handle_new_config_options(result.configOptions)
+            end
+
+            Logger.notify(
+                "Model changed to: " .. model_id,
+                vim.log.levels.INFO,
+                { title = "Agentic Model changed" }
+            )
+        end
+    end
+
+    if is_legacy then
+        self.agent:set_model(self.session_id, model_id, callback)
+    else
+        self.agent:set_config_option(
+            self.session_id,
+            "model",
+            model_id,
+            callback
+        )
+    end
 end
 
 --- @param mode_id string
 function SessionManager:_set_mode_to_chat_header(mode_id)
-    local mode = self.agent_modes:get_mode(mode_id)
+    local mode_name = self.config_options:get_mode_name(mode_id)
     self.widget:render_header(
         "chat",
-        string.format("Mode: %s", mode and mode.name or mode_id)
+        string.format("Mode: %s", mode_name or mode_id)
     )
 end
 
@@ -459,11 +536,15 @@ function SessionManager:_handle_input_submit(input_text)
         local diagnostics = self.diagnostics_list:get_diagnostics()
         self.diagnostics_list:clear()
 
+        local WidgetLayout = require("agentic.ui.widget_layout")
+
         local chat_width = WidgetLayout.calculate_width(Config.windows.width)
         local chat_winid = self.widget.win_nrs.chat
         if chat_winid and vim.api.nvim_win_is_valid(chat_winid) then
             chat_width = vim.api.nvim_win_get_width(chat_winid)
         end
+
+        local DiagnosticsContext = require("agentic.ui.diagnostics_context")
 
         local formatted_diagnostics =
             DiagnosticsContext.format_diagnostics(diagnostics, chat_width)
@@ -646,32 +727,28 @@ function SessionManager:new_session(opts)
         self.chat_history.session_id = response.sessionId
         self.chat_history.timestamp = os.time()
 
-        if response.modes then
-            self.agent_modes:set_modes(response.modes)
-
-            local default_mode = self.agent.provider_config.default_mode
-            local can_use_default = default_mode
-                and default_mode ~= response.modes.currentModeId
-                and self.agent_modes:get_mode(default_mode)
-
-            if can_use_default and default_mode then
-                self:_handle_mode_change(default_mode)
-            else
-                if
-                    default_mode and not self.agent_modes:get_mode(default_mode)
-                then
-                    Logger.notify(
-                        string.format(
-                            "Configured default_mode '%s' not available. Using provider default.",
-                            default_mode
-                        ),
-                        vim.log.levels.WARN,
-                        { title = "Agentic" }
-                    )
-                end
+        if response.configOptions then
+            Logger.debug("Provider announce configOptions")
+            self:_handle_new_config_options(response.configOptions)
+        else
+            if response.modes then
+                Logger.debug("Provider announce legacy mode")
+                self.config_options:set_legacy_modes(response.modes)
                 self:_set_mode_to_chat_header(response.modes.currentModeId)
             end
+
+            if response.models then
+                Logger.debug("Provider announce legacy models")
+                self.config_options:set_legacy_models(response.models)
+            end
         end
+
+        self.config_options:set_initial_mode(
+            self.agent.provider_config.default_mode,
+            function(mode, is_legacy)
+                self:_handle_mode_change(mode, is_legacy)
+            end
+        )
 
         -- Reset first message flag for new session (skip when restoring)
         if not restore_mode then
@@ -709,6 +786,7 @@ function SessionManager:_cancel_session()
         self.file_list:clear()
         self.code_selection:clear()
         self.diagnostics_list:clear()
+        self.config_options:clear()
     end
 
     self.session_id = nil
@@ -878,6 +956,15 @@ function SessionManager:_clear_diff_in_buffer(tool_call_id, is_rejection)
     DiffPreview.clear_diff(tracker.argument, is_rejection)
 end
 
+--- @param new_config_options agentic.acp.ConfigOption[]
+function SessionManager:_handle_new_config_options(new_config_options)
+    self.config_options:set_options(new_config_options)
+
+    if self.config_options.mode and self.config_options.mode.currentValue then
+        self:_set_mode_to_chat_header(self.config_options.mode.currentValue)
+    end
+end
+
 function SessionManager:_get_system_info()
     local os_name = vim.uv.os_uname().sysname
     local os_version = vim.uv.os_uname().release
@@ -967,6 +1054,8 @@ function SessionManager:restore_from_history(history, opts)
     else
         self.chat_history = history
     end
+
+    local SessionRestore = require("agentic.session_restore")
 
     if opts.reuse_session and self.session_id then
         -- Reuse existing ACP session, just replay messages

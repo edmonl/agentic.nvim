@@ -19,8 +19,6 @@ describe("agentic.SessionManager", function()
         local notify_stub
         --- @type TestSpy
         local render_header_spy
-        --- @type TestSpy
-        local set_mode_spy
         --- @type agentic.SessionManager
         local session
         --- @type integer
@@ -31,11 +29,8 @@ describe("agentic.SessionManager", function()
             render_header_spy = spy.new(function() end)
             test_bufnr = vim.api.nvim_create_buf(false, true)
 
-            local agent_modes = AgentModes:new(
-                { chat = test_bufnr },
-                function() end
-            )
-            agent_modes:set_modes({
+            local legacy_modes = AgentModes:new()
+            legacy_modes:set_modes({
                 availableModes = {
                     { id = "plan", name = "Plan", description = "Planning" },
                     { id = "code", name = "Code", description = "Coding" },
@@ -43,11 +38,14 @@ describe("agentic.SessionManager", function()
                 currentModeId = "plan",
             })
 
-            set_mode_spy = spy.new(function() end)
-
             session = {
-                agent_modes = agent_modes,
-                agent = { set_mode = set_mode_spy },
+                config_options = {
+                    legacy_agent_modes = legacy_modes,
+                    get_mode_name = function(_self, mode_id)
+                        local mode = legacy_modes:get_mode(mode_id)
+                        return mode and mode.name or nil
+                    end,
+                },
                 widget = {
                     render_header = render_header_spy,
                     buf_nrs = { chat = test_bufnr },
@@ -65,7 +63,10 @@ describe("agentic.SessionManager", function()
         it("updates state, re-renders header, notifies user", function()
             session:_on_session_update(mode_update("code"))
 
-            assert.equal("code", session.agent_modes.current_mode_id)
+            assert.equal(
+                "code",
+                session.config_options.legacy_agent_modes.current_mode_id
+            )
 
             assert.spy(render_header_spy).was.called(1)
             assert.equal("chat", render_header_spy.calls[1][2])
@@ -74,18 +75,91 @@ describe("agentic.SessionManager", function()
             assert.spy(notify_stub).was.called(1)
             assert.equal("Mode changed to: code", notify_stub.calls[1][1])
             assert.equal(vim.log.levels.INFO, notify_stub.calls[1][2])
-
-            assert.spy(set_mode_spy).was.called(0)
         end)
 
         it("rejects invalid mode and keeps current state", function()
             session:_on_session_update(mode_update("nonexistent"))
 
-            assert.equal("plan", session.agent_modes.current_mode_id)
+            assert.equal(
+                "plan",
+                session.config_options.legacy_agent_modes.current_mode_id
+            )
             assert.spy(render_header_spy).was.called(0)
 
             assert.spy(notify_stub).was.called(1)
             assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
+        end)
+    end)
+
+    describe("_on_session_update: config_option_update", function()
+        --- @type TestSpy
+        local render_header_spy
+        --- @type agentic.SessionManager
+        local session
+        --- @type integer
+        local test_bufnr
+
+        before_each(function()
+            render_header_spy = spy.new(function() end)
+            test_bufnr = vim.api.nvim_create_buf(false, true)
+
+            local AgentConfigOptions =
+                require("agentic.acp.agent_config_options")
+            local BufHelpers = require("agentic.utils.buf_helpers")
+            local keymap_stub = spy.stub(BufHelpers, "multi_keymap_set")
+
+            local config_opts = AgentConfigOptions:new(
+                { chat = test_bufnr },
+                function() end,
+                function() end
+            )
+
+            keymap_stub:revert()
+
+            session = {
+                config_options = config_opts,
+                widget = {
+                    render_header = render_header_spy,
+                    buf_nrs = { chat = test_bufnr },
+                },
+                _on_session_update = SessionManager._on_session_update,
+                _set_mode_to_chat_header = SessionManager._set_mode_to_chat_header,
+                _handle_new_config_options = SessionManager._handle_new_config_options,
+            } --[[@as agentic.SessionManager]]
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(test_bufnr, { force = true })
+        end)
+
+        it("sets config options and updates header on mode", function()
+            --- @type agentic.acp.ConfigOptionsUpdate
+            local update = {
+                sessionUpdate = "config_option_update",
+                configOptions = {
+                    {
+                        id = "mode-1",
+                        category = "mode",
+                        currentValue = "plan",
+                        description = "Mode",
+                        name = "Mode",
+                        options = {
+                            {
+                                value = "plan",
+                                name = "Plan",
+                                description = "",
+                            },
+                        },
+                    },
+                },
+            }
+
+            session:_on_session_update(update)
+
+            assert.is_not_nil(session.config_options.mode)
+            assert.equal("plan", session.config_options.mode.currentValue)
+            assert.spy(render_header_spy).was.called(1)
+            assert.equal("Mode: Plan", render_header_spy.calls[1][3])
         end)
     end)
 
@@ -127,7 +201,6 @@ describe("agentic.SessionManager", function()
         before_each(function()
             original_provider = Config.provider
             notify_stub = spy.stub(Logger, "notify")
-            -- Make vim.schedule synchronous so on_ready callbacks fire immediately
             schedule_stub = spy.stub(vim, "schedule")
             schedule_stub:invokes(function(fn)
                 fn()
@@ -210,21 +283,17 @@ describe("agentic.SessionManager", function()
 
                 session:switch_provider()
 
-                -- Soft cancel: cancel_session called, session_id nil, perms+todos cleared
                 assert.spy(cancel_spy).was.called(1)
                 assert.is_nil(session.session_id)
                 assert.spy(perm_clear_spy).was.called(1)
                 assert.spy(todo_clear_spy).was.called(1)
 
-                -- Widget, file_list, code_selection NOT cleared
                 assert.spy(widget_clear_spy).was.called(0)
                 assert.spy(file_list_clear_spy).was.called(0)
                 assert.spy(code_selection_clear_spy).was.called(0)
 
-                -- Agent updated to new instance
                 assert.equal(mock_new_agent, session.agent)
 
-                -- new_session called with restore_mode
                 assert.spy(new_session_spy).was.called(1)
                 local opts = new_session_spy.calls[1][2]
                 assert.is_true(opts.restore_mode)
@@ -278,11 +347,8 @@ describe("agentic.SessionManager", function()
 
                 session:switch_provider()
 
-                -- on_created captured from new_session call
                 assert.is_not_nil(captured_on_created)
 
-                -- Simulate new_session calling on_created
-                -- new_session creates a fresh ChatHistory, so simulate that
                 local new_timestamp = os.time()
                 session.chat_history = {
                     messages = {},
@@ -291,7 +357,6 @@ describe("agentic.SessionManager", function()
                 }
                 captured_on_created()
 
-                -- After on_created: messages restored, but session metadata is from new session
                 assert.same(original_messages, session.chat_history.messages)
                 assert.equal("new", session.chat_history.session_id)
                 assert.equal(new_timestamp, session.chat_history.timestamp)
@@ -331,12 +396,9 @@ describe("agentic.SessionManager", function()
 
             session:switch_provider()
 
-            -- cancel_session NOT called (no session to cancel)
             assert.spy(mock_agent.cancel_session).was.called(0)
-            -- But permissions and todos still cleared
             assert.spy(session.permission_manager.clear).was.called(1)
             assert.spy(session.todo_list.clear).was.called(1)
-            -- new_session still called
             assert.spy(session.new_session).was.called(1)
         end)
     end)
