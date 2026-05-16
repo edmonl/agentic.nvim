@@ -6,8 +6,9 @@ local Fold = require("agentic.ui.tool_call_fold")
 local JsonFormat = require("agentic.utils.json_format")
 local Logger = require("agentic.utils.logger")
 local Theme = require("agentic.theme")
+local ToolCallBlocks = require("agentic.ui.tool_call_blocks")
 
-local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
+local NS_TOOL_BLOCKS = ToolCallBlocks.NS_TOOL_BLOCKS
 local NS_DIFF_HIGHLIGHTS =
     vim.api.nvim_create_namespace("agentic_diff_highlights")
 local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
@@ -458,7 +459,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         self:_apply_header_highlight(start_row, tool_call_block.status)
         self:repaint_status_row(tool_call_block.tool_call_id)
 
-        local body_start = start_row + 2
+        local body_start = start_row + ToolCallBlocks.HEADER_HEIGHT
         local body_end = end_row - 2
         if
             Fold.should_fold({
@@ -469,7 +470,11 @@ function MessageWriter:write_tool_call_block(tool_call_block)
                 is_diff = tool_call_block.diff ~= nil,
             })
         then
-            Fold.close_range(bufnr, start_row + 2, end_row)
+            Fold.close_range(
+                bufnr,
+                start_row + ToolCallBlocks.HEADER_HEIGHT,
+                end_row
+            )
             tool_call_block.has_fold = true
         end
 
@@ -578,7 +583,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         local body_lines = vim.list_slice(new_lines, 3, #new_lines - 2)
         vim.api.nvim_buf_set_lines(
             bufnr,
-            start_row + 2,
+            start_row + ToolCallBlocks.HEADER_HEIGHT,
             old_end_row - 1,
             false,
             body_lines
@@ -614,13 +619,17 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             not tracker.has_fold
             and Fold.should_fold({
                 bufnr = bufnr,
-                start_row = start_row + 2,
+                start_row = start_row + ToolCallBlocks.HEADER_HEIGHT,
                 end_row = new_end_row - 2,
                 status = tracker.status,
                 is_diff = tracker.diff ~= nil,
             })
         then
-            Fold.close_range(bufnr, start_row + 2, new_end_row)
+            Fold.close_range(
+                bufnr,
+                start_row + ToolCallBlocks.HEADER_HEIGHT,
+                new_end_row
+            )
             tracker.has_fold = true
         end
     end)
