@@ -34,21 +34,22 @@ Regression test:
 
 - Wrappers that do not forward signals (codex-acp.js today, any future
   `spawnSync`/`exec`-style wrapper) are reaped cleanly.
-- ACP children survive a hard kill of nvim (`kill -9`, OOM, segfault) because
-  they are no longer in nvim's process group. Clean exits (`:q`, `:qa`,
-  terminal close that triggers `VimLeavePre`) still tear them down via
+- ACP children survive a hard kill of nvim (`kill -9`, OOM, segfault):
+  they no longer receive `SIGHUP` from nvim's controlling-tty teardown, and
+  nothing else reaps them. Clean exits (`:q`, `:qa`, terminal close that
+  triggers `VimLeavePre`) still tear them down via
   `AgentInstance:cleanup_all`.
 - Children get no controlling tty. ACP agents are headless stdio servers, so
   this is invisible to them.
 
 ## Rejected / superseded alternatives
 
-| Option                                             | Reason rejected                                                                                                                                              |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Keep `detached = false`, kill direct PID only      | Original behaviour. Leaks codex-acp native grandchildren on every quit.                                                                                      |
-| Walk descendants with `pgrep -P` on stop           | Works without spawn-flag changes and keeps crash-case cleanup via parent pgrp, but adds per-shutdown fork+exec and a race window where new grandchildren spawned during the walk are missed. |
-| File upstream fix in `codex-acp.js` to forward sigs | Right long-term, but does not help users until they upgrade. Pursue in parallel.                                                                             |
-| `PR_SET_PDEATHSIG` so children die with nvim       | Linux-only, not exposed by libuv, would require an FFI shim. Not worth it for the hard-kill edge case.                                                       |
+| Option | Reason rejected |
+| --- | --- |
+| Keep `detached = false`, kill direct PID only | Original behaviour. Leaks codex-acp native grandchildren on every quit. |
+| Walk descendants with `pgrep -P` on stop | Works without spawn-flag changes and keeps crash-case cleanup via parent pgrp, but adds per-shutdown fork+exec and a race window where new grandchildren spawned during the walk are missed. |
+| File upstream fix in `codex-acp.js` to forward sigs | Right long-term, but does not help users until they upgrade. Pursue in parallel. |
+| `PR_SET_PDEATHSIG` so children die with nvim | Linux-only, not exposed by libuv, would require an FFI shim. Not worth it for the hard-kill edge case. |
 
 ## Changelog
 
