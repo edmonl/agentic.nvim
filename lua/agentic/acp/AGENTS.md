@@ -323,6 +323,9 @@ To handle a new provider quirk, add the fallback logic in
 ```mermaid
 flowchart TD
     P["Provider sends 'session/request_permission'"]
+    C["ACPClient.__handle_request_permission<br/>emits request.toolCall as tool_call_update"]
+    PH["SessionManager:_on_tool_call_update<br/>routes missing tracker to first render"]
+    W["MessageWriter:write_tool_call_block<br/>defaults missing fields to<br/>other(Pending) pending"]
     SM["SessionManager<br/>opens diff preview if request carries a diff"]
     PM["PermissionManager:add_request(request, callback)"]
     Store["Store in pending[tool_call_id]<br/>append to insertion order"]
@@ -339,7 +342,7 @@ flowchart TD
     Adv["_set_focus(next head)"]
     Done["idle"]
 
-    P --> SM --> PM --> Store --> F
+    P --> C --> PH --> W --> SM --> PM --> Store --> F
     F -->|yes| Focus
     F -->|no| Paint
     Focus --> U
@@ -352,6 +355,14 @@ flowchart TD
 
 Multiple permission requests can be pending concurrently (one per tool call).
 Focus tracks the queue head (oldest pending); new arrivals do not steal focus.
+Requests that arrive before their `tool_call` notification are normalized by
+the first-render path: `SessionManager:_on_tool_call_update` routes a missing
+tracker through `MessageWriter:write_tool_call_block`, which defaults missing
+kind/title/status to `other(Pending)` + `pending`. This creates row N before
+`PermissionManager:add_request` paints buttons, without overwriting partial
+updates on existing blocks. Regression:
+`lua/agentic/ui/message_writer.test.lua::"defaults missing initial tool call fields before render"`.
+
 Digit keys `1`..`4` dispatch the focused block's option;
 `Config.keymaps.permission.cycle_next` / `cycle_prev` (default `<C-n>` /
 `<C-p>`) cycle focus between pending blocks. `h` / `l` / `<Left>` / `<Right>`
