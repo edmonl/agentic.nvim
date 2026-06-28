@@ -780,7 +780,13 @@ function ChatWidget:schedule_header_refresh()
     -- re-renders when multiple updates come in quick succession
     vim.defer_fn(function()
         self._header_refresh_scheduled = false
-        for panel_name, header_config in pairs(Config.headers) do
+
+        local headers = Config.headers
+        if type(headers) ~= "table" then
+            return
+        end
+
+        for panel_name, header_config in pairs(headers) do
             if type(header_config) == "function" then
                 self:render_header(panel_name)
             end

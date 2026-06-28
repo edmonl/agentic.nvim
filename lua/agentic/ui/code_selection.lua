@@ -133,14 +133,14 @@ function CodeSelection:to_prompt()
                 type = "text",
                 text = string.format(
                     table.concat({
-                        "<selected_code>",
+                        "<agentic_selected_code>",
                         "<path>%s</path>",
                         "<line_start>%s</line_start>",
                         "<line_end>%s</line_end>",
-                        "<snippet>",
+                        "<agentic_selected_code_snippet>",
                         "%s",
-                        "</snippet>",
-                        "</selected_code>",
+                        "</agentic_selected_code_snippet>",
+                        "</agentic_selected_code>",
                     }, "\n"),
                     FileSystem.to_absolute_path(selection.file_path),
                     selection.start_line,
