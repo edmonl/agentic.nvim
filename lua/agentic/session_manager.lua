@@ -527,6 +527,17 @@ function SessionManager:_handle_input_submit(input_text)
             type = "text",
             text = EnvironmentInfo.get_system_info(),
         })
+
+        local initial_instructions = Config.settings.initial_instructions
+        if
+            type(initial_instructions) == "string"
+            and initial_instructions:match("%S")
+        then
+            table.insert(prompt, {
+                type = "text",
+                text = initial_instructions,
+            })
+        end
     end
 
     --- The message to be written to the chat widget

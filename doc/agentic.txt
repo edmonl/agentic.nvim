@@ -328,6 +328,9 @@ settings ~
   `move_cursor_to_chat_on_submit`  Automatically move cursor to chat
                        window after submitting a prompt.
                        Default: `true`.
+  `initial_instructions`  Optional static instructions injected after
+                       system information on the first prompt of
+                       each session. Default: `nil`.
 
                                           *agentic-config-provider-switcher*
 provider_switcher ~
@@ -682,6 +685,8 @@ System information ~
 The first message of each session automatically includes platform
 info, shell/Neovim version, date, git status, and project root.
 This reduces time to first response by providing immediate context.
+Set `settings.initial_instructions` to append static instructions after
+this automatic context on the first prompt of each session.
 
 Event hooks ~
                                                      *agentic-hooks*
