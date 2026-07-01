@@ -254,6 +254,7 @@
 --- Control various behaviors and features of the plugin
 --- @class agentic.UserConfig.Settings
 --- @field move_cursor_to_chat_on_submit boolean Automatically move cursor to chat window after submitting a prompt
+--- @field initial_instructions? string Static instructions injected after system information on the first prompt of each session
 
 --- @class (partial) agentic.PartialUserConfig.Windows.Chat: agentic.UserConfig.Windows.Chat
 --- @class (partial) agentic.PartialUserConfig.Windows.Input: agentic.UserConfig.Windows.Input
@@ -639,6 +640,7 @@ local ConfigDefault = {
 
     settings = {
         move_cursor_to_chat_on_submit = true,
+        initial_instructions = nil,
     },
 
     provider_switcher = {
