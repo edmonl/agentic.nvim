@@ -1112,9 +1112,22 @@ Folding ~
         threshold = 10,
         fold_on_error = false,  -- Fold failed calls after threshold
       },
+      agent_work = {
+        enabled = true,  -- Fold completed intermediate agent work
+      },
     },
   }
 <
+
+Completed intermediate work is folded once the turn ends. The user prompt,
+agent header, final answer, and completion marker stay visible. Agent-work
+folding is enabled by default, has no threshold, and can be disabled with
+`agent_work.enabled = false`.
+
+Tool-call body folding keeps its own threshold and `fold_on_error` policy.
+Opening the outer fold preserves nested tool-fold state. Use `zo` to open one
+level, `zO` to open all nested levels, and `zc` to close one level. `zR` and
+`zM` open or close all folds in the chat window.
 
                                           *agentic-tool-call-title-config*
 Tool call titles ~

@@ -1079,7 +1079,7 @@ describe("agentic.ui.ChatWidget", function()
         end)
 
         it(
-            "preserves manual folds across hide/show via hidden chat window",
+            "preserves outer and user-opened nested folds across hide/show",
             function()
                 local Fold = require("agentic.ui.tool_call_fold")
 
@@ -1090,6 +1090,7 @@ describe("agentic.ui.ChatWidget", function()
                         threshold = 5,
                         fold_on_error = false,
                     },
+                    agent_work = { enabled = true },
                 }
 
                 vim.bo[widget.buf_nrs.chat].modifiable = true
@@ -1103,15 +1104,23 @@ describe("agentic.ui.ChatWidget", function()
 
                 widget:show({ focus_prompt = false })
                 Fold.close_range(widget.buf_nrs.chat, 10, 25)
+                vim.api.nvim_win_call(widget.win_nrs.chat, function()
+                    vim.api.nvim_win_set_cursor(widget.win_nrs.chat, { 15, 0 })
+                    vim.cmd("normal! zo")
+                    assert.equal(vim.fn.foldclosed(15), -1)
+                end)
+                Fold.close_agent_work_range(widget.buf_nrs.chat, 5, 30)
                 widget:hide()
 
-                Fold.close_range(widget.buf_nrs.chat, 35, 50)
+                Fold.close_agent_work_range(widget.buf_nrs.chat, 35, 50)
 
                 widget:show({ focus_prompt = false })
                 local chat_win = widget.win_nrs.chat
                 vim.api.nvim_win_call(chat_win, function()
-                    assert.equal(vim.fn.foldclosed(15), 10)
-                    assert.equal(vim.fn.foldclosedend(15), 25)
+                    assert.equal(vim.fn.foldclosed(15), 5)
+                    vim.api.nvim_win_set_cursor(chat_win, { 5, 0 })
+                    vim.cmd("normal! zo")
+                    assert.equal(vim.fn.foldclosed(15), -1)
                     assert.equal(vim.fn.foldclosed(40), 35)
                     assert.equal(vim.fn.foldclosedend(40), 50)
                 end)

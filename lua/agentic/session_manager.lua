@@ -902,7 +902,7 @@ function SessionManager:complete_start(spec, result, err, callback)
             Config.message_icons.finished,
             os.date("%Y-%m-%d %H:%M:%S")
         )
-        self.message_writer:write_message(
+        self.message_writer:write_restoration_complete_message(
             ACPPayloads.generate_agent_message(finish_message)
         )
     end

@@ -555,6 +555,7 @@ describe("WidgetLayout", function()
                     threshold = 5,
                     fold_on_error = false,
                 },
+                agent_work = { enabled = true },
             }
 
             vim.cmd("tabnew")
@@ -780,6 +781,7 @@ describe("WidgetLayout", function()
                         threshold = 5,
                         fold_on_error = false,
                     },
+                    agent_work = { enabled = true },
                 }
             end)
 

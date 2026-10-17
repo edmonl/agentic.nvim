@@ -223,9 +223,14 @@
 --- @field threshold integer Fold when the interior occupies more than this many wrapped screen rows. 0 always folds. Negative values are clamped to 0.
 --- @field fold_on_error boolean Whether failed tool calls should fold when over threshold.
 
+--- Completed agent-work folding configuration
+--- @class agentic.UserConfig.Folding.AgentWork
+--- @field enabled boolean Whether to fold completed intermediate agent work.
+
 --- Folding behavior in the chat buffer
 --- @class agentic.UserConfig.Folding
 --- @field tool_calls agentic.UserConfig.Folding.ToolCalls
+--- @field agent_work agentic.UserConfig.Folding.AgentWork
 
 --- Tool call title display configuration
 --- @class agentic.UserConfig.ToolCalls.Title
@@ -279,6 +284,7 @@
 --- @class (partial) agentic.PartialUserConfig.AutoScroll: agentic.UserConfig.AutoScroll
 --- @class (partial) agentic.PartialUserConfig.DiffPreview: agentic.UserConfig.DiffPreview
 --- @class (partial) agentic.PartialUserConfig.Folding.ToolCalls: agentic.UserConfig.Folding.ToolCalls
+--- @class (partial) agentic.PartialUserConfig.Folding.AgentWork: agentic.UserConfig.Folding.AgentWork
 --- @class (partial) agentic.PartialUserConfig.ToolCalls.Title: agentic.UserConfig.ToolCalls.Title
 --- @class (partial) agentic.PartialUserConfig.Settings: agentic.UserConfig.Settings
 --- @class (partial) agentic.PartialUserConfig.ProviderSwitcher: agentic.UserConfig.ProviderSwitcher
@@ -300,6 +306,7 @@
 
 --- @class (partial) agentic.PartialUserConfig.Folding: agentic.UserConfig.Folding
 --- @field tool_calls? agentic.PartialUserConfig.Folding.ToolCalls
+--- @field agent_work? agentic.PartialUserConfig.Folding.AgentWork
 
 --- @class (partial) agentic.PartialUserConfig.ToolCalls: agentic.UserConfig.ToolCalls
 --- @field title? agentic.PartialUserConfig.ToolCalls.Title
@@ -609,6 +616,9 @@ local ConfigDefault = {
             enabled = true,
             threshold = 10,
             fold_on_error = false,
+        },
+        agent_work = {
+            enabled = true,
         },
     },
 

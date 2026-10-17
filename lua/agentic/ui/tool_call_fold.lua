@@ -1,5 +1,7 @@
 local Config = require("agentic.config")
 
+local NS_AGENT_WORK = vim.api.nvim_create_namespace("agentic_agent_work_folds")
+
 --- @class agentic.ui.ToolCallFold
 local Fold = {}
 
@@ -17,6 +19,12 @@ function Fold.threshold()
         return nil
     end
     return math.max(0, cfg.threshold or 0)
+end
+
+--- @return boolean enabled
+function Fold.agent_work_enabled()
+    local cfg = Config.folding and Config.folding.agent_work
+    return cfg ~= nil and cfg.enabled == true
 end
 
 --- @param status agentic.acp.ToolCallStatus|nil
@@ -75,6 +83,23 @@ end
 --- @return string
 function Fold.foldtext()
     local folded = vim.v.foldend - vim.v.foldstart + 1
+    local bufnr = vim.api.nvim_get_current_buf()
+    local marks = vim.api.nvim_buf_get_extmarks(
+        bufnr,
+        NS_AGENT_WORK,
+        { vim.v.foldstart - 1, 0 },
+        { vim.v.foldstart - 1, -1 },
+        { details = true }
+    )
+    for _, mark in ipairs(marks) do
+        local details = mark[4]
+        if details and details.end_row == vim.v.foldend then
+            return string.format(
+                "  %d lines of agent work folded - `zo` open | `zO` open all | `zc` close",
+                folded
+            )
+        end
+    end
     return string.format("  %d lines folded - `zo` open | `zc` close", folded)
 end
 
@@ -83,7 +108,7 @@ local FOLDTEXT_EXPR = "v:lua.require'agentic.ui.tool_call_fold'.foldtext()"
 --- @param winid integer
 --- @param _bufnr integer
 function Fold.setup_window(winid, _bufnr)
-    if Fold.threshold() == nil then
+    if Fold.threshold() == nil and not Fold.agent_work_enabled() then
         return
     end
     if vim.wo[winid].foldmethod ~= "manual" then
@@ -99,22 +124,49 @@ end
 --- @param bufnr integer
 --- @param start_lnum integer 1-indexed inclusive
 --- @param end_lnum integer 1-indexed inclusive
-function Fold.close_range(bufnr, start_lnum, end_lnum)
-    if Fold.threshold() == nil then
-        return
-    end
+--- @return boolean closed
+function Fold:_close_range(bufnr, start_lnum, end_lnum)
     if start_lnum > end_lnum then
-        return
+        return false
     end
     local wins = vim.fn.win_findbuf(bufnr)
     if #wins == 0 then
-        return
+        return false
     end
     vim.api.nvim_win_call(wins[1], function()
         vim.cmd(
             string.format("silent! noautocmd %d,%dfold", start_lnum, end_lnum)
         )
     end)
+    return true
+end
+
+--- @param bufnr integer
+--- @param start_lnum integer 1-indexed inclusive
+--- @param end_lnum integer 1-indexed inclusive
+function Fold.close_range(bufnr, start_lnum, end_lnum)
+    if Fold.threshold() == nil then
+        return
+    end
+    Fold:_close_range(bufnr, start_lnum, end_lnum)
+end
+
+--- @param bufnr integer
+--- @param start_lnum integer 1-indexed inclusive
+--- @param end_lnum integer 1-indexed inclusive
+function Fold.close_agent_work_range(bufnr, start_lnum, end_lnum)
+    if not Fold.agent_work_enabled() then
+        return
+    end
+    if not Fold:_close_range(bufnr, start_lnum, end_lnum) then
+        return
+    end
+    vim.api.nvim_buf_set_extmark(bufnr, NS_AGENT_WORK, start_lnum - 1, 0, {
+        end_row = end_lnum,
+        end_col = 0,
+        right_gravity = false,
+        end_right_gravity = false,
+    })
 end
 
 return Fold

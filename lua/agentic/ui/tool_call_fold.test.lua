@@ -9,15 +9,18 @@ describe("agentic.ui.ToolCallFold", function()
     local winid
     --- @type agentic.UserConfig.Folding|nil
     local saved_folding
+    local saved_thinking_icon
 
     before_each(function()
         saved_folding = Config.folding
+        saved_thinking_icon = Config.message_icons.thinking
         Config.folding = {
             tool_calls = {
                 enabled = true,
                 threshold = 5,
                 fold_on_error = false,
             },
+            agent_work = { enabled = true },
         }
         bufnr = vim.api.nvim_create_buf(false, true)
         winid = vim.api.nvim_open_win(bufnr, false, {
@@ -37,6 +40,22 @@ describe("agentic.ui.ToolCallFold", function()
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end
         Config.folding = saved_folding --- @diagnostic disable-line: assign-type-mismatch
+        Config.message_icons.thinking = saved_thinking_icon
+    end)
+
+    describe("agent_work_enabled", function()
+        it("returns the configured state", function()
+            assert.is_true(Fold.agent_work_enabled())
+
+            Config.folding.agent_work.enabled = false
+            assert.is_false(Fold.agent_work_enabled())
+        end)
+
+        it("returns false when agent-work configuration is absent", function()
+            Config.folding.agent_work = nil --- @diagnostic disable-line: assign-type-mismatch
+
+            assert.is_false(Fold.agent_work_enabled())
+        end)
     end)
 
     describe("threshold", function()
@@ -51,6 +70,7 @@ describe("agentic.ui.ToolCallFold", function()
                     threshold = 5,
                     fold_on_error = false,
                 },
+                agent_work = { enabled = true },
             }
             assert.is_nil(Fold.threshold())
         end)
@@ -62,6 +82,7 @@ describe("agentic.ui.ToolCallFold", function()
                     threshold = -3,
                     fold_on_error = false,
                 },
+                agent_work = { enabled = true },
             }
             assert.equal(Fold.threshold(), 0)
         end)
@@ -175,6 +196,7 @@ describe("agentic.ui.ToolCallFold", function()
                         threshold = 5,
                         fold_on_error = false,
                     },
+                    agent_work = { enabled = true },
                 }
                 assert.is_false(Fold.should_fold(should_fold_opts()))
             end
@@ -197,7 +219,8 @@ describe("agentic.ui.ToolCallFold", function()
     end)
 
     describe("setup_window", function()
-        it("applies manual fold options to the window", function()
+        it("applies options when only tool-call folding is enabled", function()
+            Config.folding.agent_work.enabled = false
             Fold.setup_window(winid, bufnr)
 
             assert.equal(vim.wo[winid].foldmethod, "manual")
@@ -216,11 +239,33 @@ describe("agentic.ui.ToolCallFold", function()
                     threshold = 5,
                     fold_on_error = false,
                 },
+                agent_work = { enabled = false },
             }
             Fold.setup_window(winid, bufnr)
             -- foldmethod default is "manual" so we cannot use that as
             -- the marker; assert that foldtext was NOT set instead.
             assert.is_not.equal(
+                vim.wo[winid].foldtext,
+                "v:lua.require'agentic.ui.tool_call_fold'.foldtext()"
+            )
+        end)
+
+        it("applies options when only agent-work folding is enabled", function()
+            Config.folding = {
+                tool_calls = {
+                    enabled = false,
+                    threshold = 5,
+                    fold_on_error = false,
+                },
+                agent_work = { enabled = true },
+            }
+
+            Fold.setup_window(winid, bufnr)
+
+            assert.equal(vim.wo[winid].foldmethod, "manual")
+            assert.equal(vim.wo[winid].foldlevel, 0)
+            assert.is_true(vim.wo[winid].foldenable)
+            assert.equal(
                 vim.wo[winid].foldtext,
                 "v:lua.require'agentic.ui.tool_call_fold'.foldtext()"
             )
@@ -260,6 +305,14 @@ describe("agentic.ui.ToolCallFold", function()
         end)
 
         it("preserves fold ranges across window close + reopen", function()
+            Config.folding = {
+                tool_calls = {
+                    enabled = false,
+                    threshold = 5,
+                    fold_on_error = false,
+                },
+                agent_work = { enabled = true },
+            }
             vim.api.nvim_buf_set_lines(
                 bufnr,
                 0,
@@ -268,9 +321,9 @@ describe("agentic.ui.ToolCallFold", function()
                 vim.fn["repeat"]({ "L" }, 60)
             )
             Fold.setup_window(winid, bufnr)
-            Fold.close_range(bufnr, 5, 15)
-            Fold.close_range(bufnr, 25, 35)
-            Fold.close_range(bufnr, 45, 55)
+            Fold.close_agent_work_range(bufnr, 5, 15)
+            Fold.close_agent_work_range(bufnr, 25, 35)
+            Fold.close_agent_work_range(bufnr, 45, 55)
 
             vim.api.nvim_win_close(winid, true)
             winid = vim.api.nvim_open_win(bufnr, false, {
@@ -345,6 +398,7 @@ describe("agentic.ui.ToolCallFold", function()
                     threshold = 5,
                     fold_on_error = false,
                 },
+                agent_work = { enabled = true },
             }
             Fold.close_range(bufnr, 5, 20)
             vim.api.nvim_win_call(winid, function()
@@ -371,6 +425,37 @@ describe("agentic.ui.ToolCallFold", function()
         end)
     end)
 
+    describe("close_agent_work_range", function()
+        before_each(function()
+            local lines = {}
+            for i = 1, 30 do
+                lines[i] = "L" .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            Config.folding.tool_calls.enabled = false
+            Fold.setup_window(winid, bufnr)
+        end)
+
+        it("closes when tool-call folding is disabled", function()
+            Fold.close_agent_work_range(bufnr, 5, 20)
+
+            vim.api.nvim_win_call(winid, function()
+                assert.equal(vim.fn.foldclosed(10), 5)
+                assert.equal(vim.fn.foldclosedend(10), 20)
+            end)
+        end)
+
+        it("is a no-op when agent-work folding is disabled", function()
+            Config.folding.agent_work.enabled = false
+
+            Fold.close_agent_work_range(bufnr, 5, 20)
+
+            vim.api.nvim_win_call(winid, function()
+                assert.equal(vim.fn.foldclosed(10), -1)
+            end)
+        end)
+    end)
+
     describe("foldtext", function()
         it("formats the folded line count", function()
             vim.v.foldstart = 3
@@ -379,6 +464,47 @@ describe("agentic.ui.ToolCallFold", function()
                 Fold.foldtext(),
                 "  10 lines folded - `zo` open | `zc` close"
             )
+        end)
+
+        it("identifies agent-work folds from their extmark", function()
+            vim.api.nvim_buf_set_lines(
+                bufnr,
+                0,
+                -1,
+                false,
+                { "header", "ordinary first line", "second" }
+            )
+            Fold.setup_window(winid, bufnr)
+            Fold.close_agent_work_range(bufnr, 2, 3)
+            vim.v.foldstart = 2
+            vim.v.foldend = 3
+            local result
+            vim.api.nvim_win_call(winid, function()
+                result = Fold.foldtext()
+            end)
+
+            assert.equal(
+                result,
+                "  2 lines of agent work folded - `zo` open | `zO` open all | `zc` close"
+            )
+        end)
+
+        it("keeps generic text for nested tool folds", function()
+            vim.api.nvim_buf_set_lines(
+                bufnr,
+                0,
+                -1,
+                false,
+                { "header", "tool output", "second" }
+            )
+            vim.v.foldstart = 2
+            vim.v.foldend = 3
+            local result
+            vim.api.nvim_win_call(winid, function()
+                result = Fold.foldtext()
+            end)
+
+            assert.equal(result, "  2 lines folded - `zo` open | `zc` close")
         end)
     end)
 end)

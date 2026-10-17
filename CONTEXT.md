@@ -171,7 +171,8 @@ chat buffer).
 
 **MessageWriter**: Owns the chat buffer content for one **ChatWidget**. Writes
 message chunks, **Tool Call Blocks**, status rows. State machine for
-sender-header dedup, auto-scroll capture/apply, thinking-block reuse.
+sender-header dedup, auto-scroll capture/apply, thinking-block reuse, and
+completed agent-work boundaries.
 
 **ChatHistory**: Accumulates messages for persistence. Separate from on-screen
 buffer state.
@@ -199,8 +200,10 @@ buffer. Header + top pad + body + bottom pad + status row N. Position tracked by
 a range extmark in `NS_TOOL_BLOCKS`. _Avoid_: "tool call" when discussing
 rendering — use Tool Call Block.
 
-**ToolCallFold**: Manual fold over a **Tool Call Block**'s body, anchored by the
-pad lines. See ADR 0001.
+**ToolCallFold**: Module that owns manual chat-buffer folds. **Tool Call Block**
+body folds use anchor pads and their configured threshold. Completed
+agent-work folds contain the intermediate content of a prompt turn and are
+identified by finalized range extmarks. See ADR 0001.
 
 **ToolCallDiff**: Diff extracted from a **Tool Call** and rendered inside the
 chat buffer's **Tool Call Block**. Immutable once rendered.

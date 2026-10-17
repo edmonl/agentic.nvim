@@ -14,7 +14,9 @@ Chat-buffer content, tool-call blocks, permissions: skill
 
 `MessageWriter` (one per chat buffer) owns chat-buffer content. Its parts:
 
-- `ToolCallFold`: manual folds and anchor pads. ADR 0001
+- `ToolCallFold`: manual folds; threshold-controlled tool-call body folds use
+  anchor pads, while one no-threshold outer fold contains completed
+  intermediate agent work. ADR 0001
 - `ToolCallDiff`: diff extraction and minimization
 - `ToolBlockBorder`: fence glyphs via statuscolumn. ADR 0002
 - `PermissionManager`: pending permissions and focus state. Button and status
@@ -95,5 +97,9 @@ change. MessageWriter-specific invariants live in `agentic-ui-message-writer`.
   `tool_call_fold.test.lua::should_fold::"folds when screen-row count exceeds threshold"`.
 - Fold counts wrapped rows, not buffer lines (one mega-line still folds) —
   `tool_call_fold.test.lua::should_fold::"folds a single buffer line that wraps past the threshold"`.
+- An outer agent-work fold that begins with a Tool Call Block starts on the
+  block's leading spacer, not its header; otherwise the header's `╭`
+  statuscolumn glyph appears beside the fold summary. Regression:
+  `message_writer.test.lua::"starts tool-first work on the border-free spacer"`.
 - Widget window options do not leak to redirected buffers —
   `buffer_guard.test.lua::"does not leak widget window options to the editor window after redirect"`.

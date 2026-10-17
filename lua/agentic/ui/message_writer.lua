@@ -14,6 +14,7 @@ local NS_DIFF_HIGHLIGHTS =
     vim.api.nvim_create_namespace("agentic_diff_highlights")
 local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 local NS_THINKING = vim.api.nvim_create_namespace("agentic_thinking")
+local NS_AGENT_TURN = vim.api.nvim_create_namespace("agentic_agent_turn")
 
 local PERMISSION_OPTION_LABELS = {
     allow_once = "Allow",
@@ -65,6 +66,10 @@ local TITLE_FENCE = "`````"
 --- @field _thinking_extmark_id? integer
 --- @field _thinking_start_line? integer
 --- @field _thinking_end_line? integer
+--- @field _agent_content_extmark_id? integer
+--- @field _agent_work_extmark_id? integer
+--- @field _final_candidate_extmark_id? integer
+--- @field _turn_has_intermediate boolean
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -82,6 +87,7 @@ function MessageWriter:new(bufnr)
         _should_auto_scroll = nil,
         _scroll_scheduled = false,
         _is_restoring = false,
+        _turn_has_intermediate = false,
     }, self)
 
     return self
@@ -95,7 +101,139 @@ end
 --- Resets sender tracking so the next message writes a fresh header
 function MessageWriter:reset_sender_tracking()
     self._last_sender = nil
-    self:_clear_thinking_state()
+    self:_take_thinking_range()
+    self:_clear_agent_turn_tracking()
+end
+
+--- @param extmark_id integer|nil
+function MessageWriter:_delete_agent_turn_extmark(extmark_id)
+    if extmark_id then
+        pcall(
+            vim.api.nvim_buf_del_extmark,
+            self.bufnr,
+            NS_AGENT_TURN,
+            extmark_id
+        )
+    end
+end
+
+function MessageWriter:_clear_agent_turn_tracking()
+    self:_delete_agent_turn_extmark(self._agent_content_extmark_id)
+    self:_delete_agent_turn_extmark(self._agent_work_extmark_id)
+    self:_delete_agent_turn_extmark(self._final_candidate_extmark_id)
+    self._agent_content_extmark_id = nil
+    self._agent_work_extmark_id = nil
+    self._final_candidate_extmark_id = nil
+    self._turn_has_intermediate = false
+end
+
+--- @param row integer
+function MessageWriter:_ensure_agent_content_start(row)
+    if self._agent_content_extmark_id then
+        return
+    end
+    self._agent_content_extmark_id = vim.api.nvim_buf_set_extmark(
+        self.bufnr,
+        NS_AGENT_TURN,
+        row,
+        0,
+        { right_gravity = false }
+    )
+end
+
+--- @param row integer
+function MessageWriter:_start_final_candidate(row)
+    self:_ensure_agent_content_start(row)
+    self:_delete_agent_turn_extmark(self._final_candidate_extmark_id)
+    self._final_candidate_extmark_id = vim.api.nvim_buf_set_extmark(
+        self.bufnr,
+        NS_AGENT_TURN,
+        row,
+        0,
+        { right_gravity = false }
+    )
+end
+
+--- @param start_row integer
+--- @param end_row integer
+function MessageWriter:_mark_agent_intermediate(start_row, end_row)
+    self:_ensure_agent_content_start(start_row)
+    self:_delete_agent_turn_extmark(self._final_candidate_extmark_id)
+    self._final_candidate_extmark_id = nil
+    self._turn_has_intermediate = true
+
+    local content_pos = vim.api.nvim_buf_get_extmark_by_id(
+        self.bufnr,
+        NS_AGENT_TURN,
+        self._agent_content_extmark_id,
+        {}
+    )
+    local content_start = content_pos and content_pos[1]
+    if content_start == nil then
+        return
+    end
+
+    self._agent_work_extmark_id = vim.api.nvim_buf_set_extmark(
+        self.bufnr,
+        NS_AGENT_TURN,
+        content_start,
+        0,
+        {
+            id = self._agent_work_extmark_id,
+            end_row = end_row + 1,
+            end_col = 0,
+            right_gravity = false,
+            end_right_gravity = false,
+        }
+    )
+end
+
+--- @return integer|nil start_row
+--- @return integer|nil end_row
+function MessageWriter:_take_agent_work_range()
+    local start_row
+    local end_row
+    if self._turn_has_intermediate and self._agent_work_extmark_id then
+        local pos = vim.api.nvim_buf_get_extmark_by_id(
+            self.bufnr,
+            NS_AGENT_TURN,
+            self._agent_work_extmark_id,
+            { details = true }
+        )
+        local details = pos and pos[3]
+        if pos and pos[1] and details and details.end_row then
+            start_row = pos[1]
+            end_row = details.end_row - 1
+        end
+    end
+
+    if end_row and self._final_candidate_extmark_id then
+        local candidate_pos = vim.api.nvim_buf_get_extmark_by_id(
+            self.bufnr,
+            NS_AGENT_TURN,
+            self._final_candidate_extmark_id,
+            {}
+        )
+        local candidate_start = candidate_pos and candidate_pos[1]
+        if candidate_start then
+            end_row = math.min(end_row, candidate_start - 1)
+        end
+    end
+
+    self:_clear_agent_turn_tracking()
+    if start_row and end_row and start_row <= end_row then
+        return start_row, end_row
+    end
+    return nil, nil
+end
+
+--- @param start_row integer|nil
+--- @param end_row integer|nil
+function MessageWriter:_close_agent_work_range(start_row, end_row)
+    if not start_row or not end_row then
+        return
+    end
+    Fold.close_agent_work_range(self.bufnr, start_row + 1, end_row + 1)
 end
 
 --- Clears thinking block tracking state.
@@ -106,6 +244,30 @@ function MessageWriter:_clear_thinking_state()
     self._thinking_end_line = nil
 end
 
+--- Takes the live extmark range and clears active thinking state.
+--- @return integer|nil start_row
+--- @return integer|nil end_row
+function MessageWriter:_take_thinking_range()
+    local start_row
+    local end_row
+    if self._thinking_extmark_id then
+        local pos = vim.api.nvim_buf_get_extmark_by_id(
+            self.bufnr,
+            NS_THINKING,
+            self._thinking_extmark_id,
+            { details = true }
+        )
+        local details = pos and pos[3]
+        if pos and pos[1] and details and details.end_row then
+            start_row = pos[1]
+            end_row = details.end_row
+        end
+    end
+
+    self:_clear_thinking_state()
+    return start_row, end_row
+end
+
 --- Writes a structural message (e.g. welcome banner) without triggering
 --- a sender header. Resets sender tracking after so the next real message
 --- gets its own header.
@@ -113,7 +275,7 @@ end
 function MessageWriter:write_structural_message(update)
     local saved = self._last_sender
     self._last_sender = "user"
-    self:write_message(update)
+    self:_write_message(update, false, false)
     self._last_sender = saved
 end
 
@@ -173,9 +335,10 @@ function MessageWriter:write_restoring_message(update)
     self._is_restoring = false
 end
 
---- Writes a full message to the chat buffer and appends a trailing blank line
 --- @param update agentic.acp.SessionUpdateMessage
-function MessageWriter:write_message(update)
+--- @param track_turn boolean
+--- @param finalize_turn boolean
+function MessageWriter:_write_message(update, track_turn, finalize_turn)
     local text = update.content
         and update.content.type == "text"
         and update.content.text
@@ -184,18 +347,55 @@ function MessageWriter:write_message(update)
         return
     end
 
-    self:_clear_thinking_state()
+    local work_start
+    local work_end
+    local is_user = update.sessionUpdate == "user_message_chunk"
+    if finalize_turn or (track_turn and is_user) then
+        work_start, work_end = self:_take_agent_work_range()
+    end
+
+    self:_take_thinking_range()
     self:_capture_scroll(self.bufnr)
     self:_maybe_write_sender_header(update.sessionUpdate)
 
     local lines = vim.split(text, "\n", { plain = true })
+    local message_start
 
     BufHelpers.with_modifiable(self.bufnr, function()
+        if BufHelpers.is_buffer_empty(self.bufnr) then
+            message_start = 0
+        else
+            message_start = vim.api.nvim_buf_line_count(self.bufnr)
+        end
         self:_append_lines(lines)
         self:_append_lines({ "" })
     end)
 
+    if track_turn then
+        if is_user then
+            self._last_message_type = "user_message_chunk"
+        elseif
+            update.sessionUpdate == "agent_message_chunk" and message_start
+        then
+            self:_start_final_candidate(message_start)
+            self._last_message_type = "agent_message_chunk"
+        end
+    end
+
+    self:_close_agent_work_range(work_start, work_end)
     self:_apply_scroll(self.bufnr)
+end
+
+--- Writes a full message to the chat buffer and appends a trailing blank line
+--- @param update agentic.acp.SessionUpdateMessage
+function MessageWriter:write_message(update)
+    self:_write_message(update, true, false)
+end
+
+--- Writes the session-restored marker after finalizing replayed agent work.
+--- @param update agentic.acp.SessionUpdateMessage
+function MessageWriter:write_restoration_complete_message(update)
+    self:_write_message(update, false, true)
 end
 
 --- Appends message chunks to the last line and column in the chat buffer
@@ -216,10 +416,11 @@ function MessageWriter:write_message_chunk(update)
     self:_capture_scroll(self.bufnr)
 
     local is_thought = update.sessionUpdate == "agent_thought_chunk"
+    local starts_final_candidate = not is_thought
+        and self._last_message_type ~= "agent_message_chunk"
 
-    -- Clear thinking state when leaving a thinking block
     if not is_thought then
-        self:_clear_thinking_state()
+        self:_take_thinking_range()
     end
 
     -- Prepend emoji on first thought chunk of a block
@@ -270,6 +471,7 @@ function MessageWriter:write_message_chunk(update)
         local start_col = #current_line
 
         local lines_to_write = vim.split(text, "\n", { plain = true })
+        local leading_newlines = text:match("^(\n*)") or ""
 
         local success, err = pcall(
             vim.api.nvim_buf_set_text,
@@ -304,6 +506,12 @@ function MessageWriter:write_message_chunk(update)
                 new_end_line,
                 self._thinking_extmark_id
             )
+            self:_mark_agent_intermediate(
+                self._thinking_start_line,
+                new_end_line
+            )
+        elseif starts_final_candidate then
+            self:_start_final_candidate(last_line + #leading_newlines)
         end
     end)
 
@@ -438,9 +646,10 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         tool_call_block.body = JsonFormat.format_lines(tool_call_block.body)
     end
 
-    self:_clear_thinking_state()
+    self:_take_thinking_range()
     self:_capture_scroll(self.bufnr)
     self:_maybe_write_sender_header("tool_call")
+    self._last_message_type = "tool_call"
 
     BufHelpers.with_modifiable(self.bufnr, function(bufnr)
         local kind = tool_call_block.kind
@@ -496,6 +705,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             tool_call_block.has_fold = true
         end
 
+        self:_mark_agent_intermediate(start_row - 1, end_row)
         self:_append_lines({ "", "" })
     end)
 
@@ -1080,6 +1290,7 @@ function MessageWriter:replay_history_messages(messages)
             self:write_message(ACPPayloads.generate_agent_message(msg.text))
         elseif msg.type == "thought" then
             self:_maybe_write_sender_header("agent_thought_chunk")
+            self._last_message_type = "agent_thought_chunk"
 
             local text = Config.message_icons.thinking .. " " .. msg.text
             local lines = vim.split(text, "\n", { plain = true })
@@ -1094,11 +1305,15 @@ function MessageWriter:replay_history_messages(messages)
             if start_line then
                 local end_line = start_line + #lines - 1
                 self:_set_thinking_extmark(start_line, end_line)
+                self:_mark_agent_intermediate(start_line, end_line)
             end
         elseif msg.type == "tool_call" then
             self:write_tool_call_block(msg)
         end
     end
+
+    local work_start, work_end = self:_take_agent_work_range()
+    self:_close_agent_work_range(work_start, work_end)
 
     -- Restore current provider for new messages
     self._provider_name = current_provider
@@ -1596,7 +1811,11 @@ function MessageWriter:write_finish_message(response, err)
         )
     end
 
-    self:write_message(ACPPayloads.generate_agent_message(finish_message))
+    self:_write_message(
+        ACPPayloads.generate_agent_message(finish_message),
+        false,
+        true
+    )
 end
 
 function MessageWriter:destroy()
@@ -1608,6 +1827,7 @@ function MessageWriter:destroy()
     self._provider_name = nil
     self._is_restoring = false
     self:_clear_thinking_state()
+    self:_clear_agent_turn_tracking()
 end
 
 return MessageWriter

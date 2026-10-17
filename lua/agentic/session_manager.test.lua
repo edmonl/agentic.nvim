@@ -2630,6 +2630,37 @@ describe("agentic.SessionManager one-shot lifecycle", function()
         end)
     end
 
+    it(
+        "finalizes restored agent work before writing the restore marker",
+        function()
+            local agent = new_agent()
+            local manager = make_manager(agent)
+            local completion_stub = spy.stub(
+                manager.message_writer,
+                "write_restoration_complete_message"
+            )
+            local message_stub =
+                spy.stub(manager.message_writer, "write_message")
+
+            start_test_manager(
+                manager,
+                { kind = "load", session_id = "load-id" }
+            )
+            agent.ready_callback(agent)
+            flush_until(function()
+                return manager.session_id ~= nil
+            end)
+
+            local completion_count = completion_stub.call_count
+            local message_count = message_stub.call_count
+            completion_stub:revert()
+            message_stub:revert()
+
+            assert.equal(1, completion_count)
+            assert.equal(0, message_count)
+        end
+    )
+
     it("prefers config options over legacy load metadata", function()
         local agent = new_agent()
         agent.load_response = {

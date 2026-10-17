@@ -74,6 +74,17 @@ describe("config_default", function()
             assert.equal(false, cfg.diff_preview.enabled)
         end)
 
+        it("accepts partial agent-work folding config", function()
+            --- @type agentic.PartialUserConfig
+            local cfg = {
+                folding = {
+                    agent_work = { enabled = false },
+                },
+            }
+
+            assert.equal(false, cfg.folding.agent_work.enabled)
+        end)
+
         it("accepts partial tool call title config", function()
             --- @type agentic.PartialUserConfig
             local cfg = {

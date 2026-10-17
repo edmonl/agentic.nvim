@@ -1,7 +1,7 @@
-# 0001. Tool-call folding and fold-state preservation
+# 0001. Chat folding and fold-state preservation
 
 - Status: accepted
-- Last updated: 2026-07-29
+- Last updated: 2026-10-17
 - Related: PR #197, PR #210, discussion #212
 
 ## Context
@@ -40,6 +40,23 @@ anchors are unconditional.
 Auto-scroll runs synchronously: `_capture_scroll` pre-mutation, `_apply_scroll`
 (`G0zb` via `nvim_win_call`) post-mutation, same tick. No `vim.schedule` between
 the two.
+
+Completed prompt turns may add one outer agent-work fold. It contains reasoning,
+progress narration, tool-call blocks, diffs, output, and completed statuses,
+while the user prompt, agent header, last agent-message segment, and completion
+marker remain visible. `folding.agent_work.enabled` controls this layer and has
+no plugin threshold.
+
+ACP does not label an `agent_message_chunk` as final. `MessageWriter` therefore
+keeps the latest contiguous agent-message segment as a candidate. A later
+thought or tool call promotes that candidate into intermediate work. The prompt
+response selects the remaining candidate as final and closes the outer fold
+after writing the completion marker but before `_apply_scroll`.
+
+The outer and inner policies are independent. Tool bodies still use
+`folding.tool_calls.threshold` and `fold_on_error`. Creating the containing fold
+does not recreate or toggle nested folds, so `zo` reveals their prior state and
+`zO` opens all levels.
 
 A hidden chat float (`ChatWidget._hidden_chat_winid`) keeps exactly one window
 on the chat buffer at all times — visible chat window OR hidden float, never
@@ -84,6 +101,12 @@ anchor pads as provider output, so it counts toward `Fold.should_fold`.
   replacement.
 - Header rewritten unconditionally because providers send placeholder titles
   before the real one. Header lives outside the fold so this is cheap.
+- Active turn boundaries use extmarks so earlier buffer mutations cannot stale
+  the final range. Finalized agent-work extmarks identify outer fold text.
+- Agent-work folds close only at prompt completion. Direct answers without
+  intermediate activity do not create an outer fold.
+- Nested tool folds retain their configured and user-selected state when the
+  outer fold is created or toggled.
 - `Fold.setup_window` must run after every chat-window open with equality guards
   on `foldmethod` / `foldlevel`. Vim's set-handler fires on no-op assigns; an
   unguarded `foldlevel = 0` re-closes user-opened folds.
@@ -119,14 +142,15 @@ Our case (live transitions on growing blocks) is the harder variant.
 
 ## Changelog
 
-| Date       | Change                                         |
-| ---------- | ---------------------------------------------- |
-| 2026-04-18 | Initial: foldexpr + threshold + foldtext.      |
-| 2026-04-29 | Manual folds + anchor pads + sync scroll.      |
-| 2026-04-29 | Hidden chat float preserves fold state.        |
-| 2026-05-03 | Screen-row folding; sync dimensions/wrap.      |
-| 2026-05-15 | Long-title body counts inside body fold range. |
-| 2026-07-29 | Document configured-versus-visible widths.     |
+| Date       | Change                                                |
+| ---------- | ----------------------------------------------------- |
+| 2026-04-18 | Initial: foldexpr + threshold + foldtext.             |
+| 2026-04-29 | Manual folds + anchor pads + sync scroll.             |
+| 2026-04-29 | Hidden chat float preserves fold state.               |
+| 2026-05-03 | Screen-row folding; sync dimensions/wrap.             |
+| 2026-05-15 | Long-title body counts inside body fold range.        |
+| 2026-07-29 | Document configured-versus-visible widths.            |
+| 2026-10-17 | Fold completed intermediate turns as one outer layer. |
 
 ## Sources
 

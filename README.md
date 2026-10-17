@@ -586,8 +586,10 @@ When a panel has no `buffer_name` set, it falls back to the header title.
 
 ### Folding
 
-Completed tool call outputs are automatically folded to keep the chat buffer
-readable. Failed tool calls stay open unless `fold_on_error` is enabled.
+Completed intermediate agent work is folded into one outer fold per turn to
+keep the chat buffer readable. The user prompt, agent header, final answer, and
+completion marker stay visible. The outer fold includes reasoning, progress
+messages, tool calls, diffs, command output, and completed statuses.
 
 ```lua
 --- @type agentic.PartialUserConfig
@@ -598,17 +600,22 @@ opts = {
       threshold = 10,
       fold_on_error = false,
     },
+    agent_work = {
+      enabled = true,
+    },
   },
 }
 ```
 
 Set `threshold = 0` to always fold completed calls, and failed calls when
 `fold_on_error = true`. Negative values are clamped to 0. Set `enabled = false`
-to disable folding entirely.
+under `tool_calls` to disable nested tool-call folding. Agent-work folding has
+no threshold; set `agent_work.enabled = false` to leave intermediate work open.
 
-The fold hides the body only - the tool call header and completion status remain
-visible. Use standard Vim fold commands (`za`, `zo`, `zc`) to toggle individual
-folds, or `zR`/`zM` to open/close all folds in the chat window.
+The two settings are independent. Opening an outer fold preserves each nested
+tool fold's configured and user-selected state. Use `zo` to open one level,
+`zO` to open the outer fold and all nested folds, and `zc` to close one level.
+The standard `zR`/`zM` commands open or close all folds in the chat window.
 
 ### Tool Call Titles
 

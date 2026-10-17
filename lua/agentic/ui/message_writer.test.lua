@@ -2142,6 +2142,7 @@ describe("agentic.ui.MessageWriter", function()
                     threshold = 5,
                     fold_on_error = false,
                 },
+                agent_work = { enabled = true },
             }
             Config.auto_scroll = { threshold = 10 }
 
@@ -2198,6 +2199,282 @@ describe("agentic.ui.MessageWriter", function()
             end)
             assert.is_nil(writer.tool_call_blocks[tool_call_id].has_fold)
         end
+
+        --- @param tool_call_id string
+        local function open_outer_fold(tool_call_id)
+            local start_row = block_layout(tool_call_id)
+            local work_start = start_row - 1
+            vim.api.nvim_win_call(winid, function()
+                assert.equal(vim.fn.foldclosed(start_row + 1), work_start + 1)
+                vim.api.nvim_win_set_cursor(winid, { work_start + 1, 0 })
+                vim.cmd("normal! zo")
+            end)
+        end
+
+        describe("completed agent work", function()
+            it(
+                "waits for turn completion before folding thought output",
+                function()
+                    writer:write_message_chunk(
+                        make_thought_update("first\nsecond\nthird")
+                    )
+                    writer:write_message_chunk(make_update("final answer"))
+
+                    local thought_row = find_row("🧠 first")
+                    assert.is_not_nil(thought_row)
+                    vim.api.nvim_win_call(winid, function()
+                        assert.equal(vim.fn.foldclosed(thought_row + 1), -1)
+                    end)
+
+                    writer:write_finish_message(
+                        { stopReason = "end_turn" },
+                        nil
+                    )
+
+                    local answer_row = find_row("final answer")
+                    assert.is_not_nil(answer_row)
+                    vim.api.nvim_win_call(winid, function()
+                        assert.equal(
+                            vim.fn.foldclosed(thought_row + 1),
+                            thought_row + 1
+                        )
+                        assert.equal(vim.fn.foldclosed(answer_row + 1), -1)
+                    end)
+                end
+            )
+
+            it("folds narration, thought, and a tool block together", function()
+                writer:write_message_chunk(make_update("progress update"))
+                writer:write_message_chunk(
+                    make_thought_update("first\nsecond\nthird")
+                )
+                writer:write_tool_call_block(
+                    make_tool_call_block("after-thought", "pending")
+                )
+                writer:write_message_chunk(make_update("final answer"))
+                writer:write_finish_message({ stopReason = "end_turn" }, nil)
+
+                local progress_row = find_row("progress update")
+                local block_start = block_layout("after-thought")
+                local answer_row = find_row("final answer")
+                assert.is_not_nil(progress_row)
+                assert.is_not_nil(answer_row)
+                vim.api.nvim_win_call(winid, function()
+                    assert.equal(
+                        vim.fn.foldclosed(progress_row + 1),
+                        progress_row + 1
+                    )
+                    assert.equal(
+                        vim.fn.foldclosed(block_start + 1),
+                        progress_row + 1
+                    )
+                    assert.equal(vim.fn.foldclosed(answer_row + 1), -1)
+                end)
+            end)
+
+            it("does not create a fold for a direct answer", function()
+                writer:write_message_chunk(make_update("direct answer"))
+                writer:write_finish_message({ stopReason = "end_turn" }, nil)
+
+                local answer_row = find_row("direct answer")
+                assert.is_not_nil(answer_row)
+                vim.api.nvim_win_call(winid, function()
+                    assert.equal(vim.fn.foldclosed(answer_row + 1), -1)
+                end)
+            end)
+
+            it(
+                "folds trailing work but keeps a cancellation visible",
+                function()
+                    writer:write_message_chunk(
+                        make_thought_update("first\nsecond\nthird")
+                    )
+                    writer:write_finish_message(
+                        { stopReason = "cancelled" },
+                        nil
+                    )
+
+                    local thought_row = find_row("🧠 first")
+                    local stopped_row = find_row(
+                        string.format(
+                            "### %s Generation stopped by the user request",
+                            Config.message_icons.stopped
+                        )
+                    )
+                    assert.is_not_nil(thought_row)
+                    assert.is_not_nil(stopped_row)
+                    vim.api.nvim_win_call(winid, function()
+                        assert.equal(
+                            vim.fn.foldclosed(thought_row + 1),
+                            thought_row + 1
+                        )
+                        assert.equal(vim.fn.foldclosed(stopped_row + 1), -1)
+                    end)
+                end
+            )
+
+            it("leaves agent work open when disabled", function()
+                Config.folding.agent_work.enabled = false
+                writer:write_message_chunk(
+                    make_thought_update("first\nsecond\nthird")
+                )
+                writer:write_message_chunk(make_update("final answer"))
+                writer:write_finish_message({ stopReason = "end_turn" }, nil)
+
+                local start_row = find_row("🧠 first")
+                assert.is_not_nil(start_row)
+                vim.api.nvim_win_call(winid, function()
+                    assert.equal(vim.fn.foldclosed(start_row + 1), -1)
+                end)
+            end)
+
+            it("starts tool-first work on the border-free spacer", function()
+                Config.folding.tool_calls.enabled = false
+                writer:write_tool_call_block(
+                    make_tool_call_block("outer-only", "completed", LONG_BODY)
+                )
+                writer:write_message_chunk(make_update("final answer"))
+                writer:write_finish_message({ stopReason = "end_turn" }, nil)
+
+                local block_start = block_layout("outer-only")
+                local work_start = block_start - 1
+                local ToolBlockBorder = require("agentic.ui.tool_block_border")
+                assert.equal(
+                    " ",
+                    ToolBlockBorder.glyph_for_line(bufnr, work_start, 0)
+                )
+                vim.api.nvim_win_call(winid, function()
+                    assert.equal(
+                        vim.fn.foldclosed(block_start + 1),
+                        work_start + 1
+                    )
+                end)
+            end)
+
+            it(
+                "preserves a user-opened nested tool fold when the outer fold closes",
+                function()
+                    writer:write_tool_call_block(
+                        make_tool_call_block(
+                            "opened-inner",
+                            "completed",
+                            LONG_BODY
+                        )
+                    )
+                    local block_start, top_pad_row =
+                        block_layout("opened-inner")
+                    vim.api.nvim_win_call(winid, function()
+                        assert.equal(
+                            vim.fn.foldclosed(top_pad_row + 1),
+                            top_pad_row + 1
+                        )
+                        vim.api.nvim_win_set_cursor(
+                            winid,
+                            { top_pad_row + 1, 0 }
+                        )
+                        vim.cmd("normal! zo")
+                        assert.equal(vim.fn.foldclosed(top_pad_row + 1), -1)
+                    end)
+
+                    writer:write_message_chunk(make_update("final answer"))
+                    writer:write_finish_message(
+                        { stopReason = "end_turn" },
+                        nil
+                    )
+
+                    local work_start = block_start - 1
+                    vim.api.nvim_win_call(winid, function()
+                        assert.equal(
+                            vim.fn.foldclosed(block_start + 1),
+                            work_start + 1
+                        )
+                        vim.api.nvim_win_set_cursor(
+                            winid,
+                            { work_start + 1, 0 }
+                        )
+                        vim.cmd("normal! zo")
+                        assert.equal(vim.fn.foldclosed(top_pad_row + 1), -1)
+                    end)
+                end
+            )
+
+            it("keeps the user message outside the work fold", function()
+                writer:write_message(
+                    make_update("question", "user_message_chunk")
+                )
+                writer:write_message_chunk(make_thought_update("thinking"))
+                writer:write_message_chunk(make_update("final answer"))
+                writer:write_finish_message({ stopReason = "end_turn" }, nil)
+
+                local question_row = find_row("question")
+                local thought_row = find_row("🧠 thinking")
+                assert.is_not_nil(question_row)
+                assert.is_not_nil(thought_row)
+                vim.api.nvim_win_call(winid, function()
+                    assert.equal(vim.fn.foldclosed(question_row + 1), -1)
+                    assert.equal(
+                        vim.fn.foldclosed(thought_row + 1),
+                        thought_row + 1
+                    )
+                end)
+            end)
+
+            it("resolves a shifted work range from its extmark", function()
+                writer:write_message_chunk(
+                    make_thought_update("first\nsecond\nthird")
+                )
+                vim.api.nvim_buf_set_lines(
+                    bufnr,
+                    0,
+                    0,
+                    false,
+                    { "inserted before thought" }
+                )
+                writer:write_message_chunk(make_update("final answer"))
+                writer:write_finish_message({ stopReason = "end_turn" }, nil)
+
+                local shifted_start = find_row("🧠 first")
+                assert.is_not_nil(shifted_start)
+                vim.api.nvim_win_call(winid, function()
+                    assert.equal(
+                        vim.fn.foldclosed(shifted_start + 1),
+                        shifted_start + 1
+                    )
+                end)
+            end)
+
+            it("folds completed turns during provider-switch replay", function()
+                writer:replay_history_messages({
+                    {
+                        type = "user",
+                        text = "question",
+                        provider_name = "Claude",
+                    },
+                    {
+                        type = "thought",
+                        text = "first\nsecond\nthird",
+                        provider_name = "Claude",
+                    },
+                    {
+                        type = "agent",
+                        text = "answer",
+                        provider_name = "Claude",
+                    },
+                })
+
+                local thought_row = find_row("🧠 first")
+                local answer_row = find_row("answer")
+                assert.is_not_nil(thought_row)
+                assert.is_not_nil(answer_row)
+                vim.api.nvim_win_call(winid, function()
+                    assert.equal(
+                        vim.fn.foldclosed(thought_row + 1),
+                        thought_row + 1
+                    )
+                    assert.equal(vim.fn.foldclosed(answer_row + 1), -1)
+                end)
+            end)
+        end)
 
         it(
             "closes a manual fold when completed update crosses the fold threshold",
@@ -2326,6 +2603,7 @@ describe("agentic.ui.MessageWriter", function()
                 },
             })
 
+            open_outer_fold("restored-completed")
             assert_fold_closed("restored-completed")
         end)
 
@@ -2341,6 +2619,7 @@ describe("agentic.ui.MessageWriter", function()
                 },
             })
 
+            open_outer_fold("restored-failed")
             assert_fold_open("restored-failed")
         end)
 
@@ -2360,6 +2639,7 @@ describe("agentic.ui.MessageWriter", function()
                     },
                 })
 
+                open_outer_fold("restored-failed-folded")
                 assert_fold_closed("restored-failed-folded")
             end
         )

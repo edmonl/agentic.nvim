@@ -31,6 +31,13 @@ fallback windows, hidden floats, and buffer redirection, see
 - Tool-call body updates replace only the body between stable anchor pads.
 - Manual folds only. Never `foldexpr`; read ADR 0001 before proposing foldexpr
   workarounds.
+- Keep intermediate agent work expanded until the prompt response completes;
+  then close one outer fold before `_apply_scroll`. The final agent-message
+  segment and completion marker stay outside. Regression:
+  `lua/agentic/ui/message_writer.test.lua::"waits for turn completion before folding thought output"`.
+- Creating or toggling the outer work fold must preserve each nested tool
+  fold's configured and user-selected state. Regression:
+  `lua/agentic/ui/message_writer.test.lua::"preserves a user-opened nested tool fold when the outer fold closes"`.
 - `tracker.rendered_button_count` is render-path-only state.
 
 ## Tool-call layout
@@ -76,11 +83,12 @@ Regression anchors:
 
 Use only the normal write path outside these cases.
 
-| Method                     | When to use                                               |
-| -------------------------- | --------------------------------------------------------- |
-| `write_structural_message` | Welcome banner on session open; banner before restore     |
-| `write_restoring_message`  | Per-message replay during session restore                 |
-| `replay_history_messages`  | Provider switch only; bulk repaint from in-memory history |
+| Method                               | When to use                                               |
+| ------------------------------------ | --------------------------------------------------------- |
+| `write_structural_message`           | Welcome banner on session open; banner before restore     |
+| `write_restoring_message`            | Per-message replay during session restore                 |
+| `write_restoration_complete_message` | Session-restored marker after final replay fold           |
+| `replay_history_messages`            | Provider switch only; bulk repaint from in-memory history |
 
 - Outside restore/provider-switch, use `write_message_chunk` or
   `write_tool_call_block`.
@@ -113,7 +121,10 @@ Pinned by, in `lua/agentic/ui/message_writer.test.lua`:
 before changing it.
 
 Thinking blocks reuse one extmark in `NS_THINKING`. Any non-thought write must
-clear thinking state first or the next thought extends the wrong extmark.
+take and clear the live range before mutation or the next thought extends the
+wrong extmark. Thinking extmarks provide highlighting only. `MessageWriter`
+tracks intermediate turn content separately and chooses the final-answer
+candidate only when the prompt response completes.
 
 ## TodoList
 
@@ -127,6 +138,9 @@ clear thinking state first or the next thought extends the wrong extmark.
 ## Traps
 
 - `vim.schedule` between mutation and `G0zb`: redraw can run with stale topline.
+- Folding agent work before the completion-marker mutation: the mutation can
+  shrink the fold or absorb the final answer. Capture before mutation, close
+  afterward, and apply scroll last.
 - Replacing the whole tool-call range: manual fold dies.
 - Re-rendering tool-call body after `tracker.diff` exists: preview consistency
   breaks. Once a diff exists, refresh only header/status.
@@ -151,3 +165,12 @@ change.
 - Sender headers deduplicate consecutive same-sender writes.
 - Auto-scroll threshold preserves reading position and permission-row cursor.
 - Thinking state clears on non-thought writes.
+- Completed agent work folds only at turn completion and remains independent of
+  the tool-call threshold. Regression:
+  `lua/agentic/ui/message_writer.test.lua::"waits for turn completion before folding thought output"`.
+- The user message, agent header, final answer, and completion marker stay
+  outside the outer fold. Regression:
+  `lua/agentic/ui/message_writer.test.lua::"keeps the user message outside the work fold"`.
+- Nested tool folds retain their open or closed state when the outer fold is
+  created or toggled. Regression:
+  `lua/agentic/ui/message_writer.test.lua::"preserves a user-opened nested tool fold when the outer fold closes"`.
