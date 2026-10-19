@@ -19,7 +19,10 @@ fallback windows, hidden floats, and buffer redirection, see
 - Cursor positioning is `G0zb`, not `G$zb`.
 - Cursor sits on the trailing `""` line below the last block, never inside a
   tool-call block.
-- `scrolloff = 4` on chat keeps room for spinner virt_lines above the cursor.
+- `scrolloff = 4` leaves room for spinner virtual lines below the buffer when
+  aligned with `zb`, but ordinary navigation to EOF can clip them.
+  `StatusAnimation:_reveal_at_bottom` reveals them only when the cursor is on
+  the last buffer line, preserving the viewport while reading history.
 - Auto-scroll captures before mutation and applies after mutation in the same
   tick. No `vim.schedule` between them.
 - The `_capture_scroll` / `_apply_scroll` pair is needed only when a mutation

@@ -1,4 +1,5 @@
 local assert = require("tests.helpers.assert")
+local Child = require("tests.helpers.child")
 local spy = require("tests.helpers.spy")
 local StatusAnimation = require("agentic.ui.status_animation")
 
@@ -213,5 +214,118 @@ describe("agentic.ui.StatusAnimation", function()
             ---@cast chunks table
             assert.equal(1, #chunks)
         end)
+    end)
+
+    describe("viewport", function()
+        local child = Child:new()
+
+        before_each(function()
+            child.setup()
+            child.api.nvim_ui_attach(60, 20, { rgb = true })
+            child.lua([[
+                vim.o.laststatus = 0
+                vim.wo[0][0].scrolloff = 4
+                local lines = {}
+                for i = 1, 100 do
+                    lines[i] = "history " .. i
+                end
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+                animation = require("agentic.ui.status_animation"):new(
+                    vim.api.nvim_get_current_buf()
+                )
+
+                function hint_visible(state)
+                    vim.cmd("redraw!")
+                    for row = 1, vim.o.lines - 1 do
+                        local text = ""
+                        for col = 1, vim.o.columns do
+                            text = text .. vim.fn.screenstring(row, col)
+                        end
+                        if text:find(state, 1, true) then
+                            return true
+                        end
+                    end
+                    return false
+                end
+            ]])
+        end)
+
+        after_each(function()
+            child.stop()
+        end)
+
+        for _, case in ipairs({
+            { state = "thinking", last_line = "history 100" },
+            { state = "generating", last_line = "history 100" },
+            {
+                state = "generating",
+                last_line = string.rep("streamed output ", 12),
+                suffix = " with wrapped output",
+            },
+        }) do
+            local state = case.state
+            it(
+                "reveals "
+                    .. state
+                    .. " after scrolling back to the bottom"
+                    .. (case.suffix or ""),
+                function()
+                    child.lua(
+                        [[
+                    local state, last_line = ...
+                    vim.api.nvim_buf_set_lines(0, -2, -1, false, { last_line })
+                    animation:start(state)
+                    vim.cmd("normal! G0zb")
+                ]],
+                        { state, case.last_line }
+                    )
+                    assert.is_true(
+                        child.lua_get("hint_visible(...)", { state })
+                    )
+
+                    child.cmd("normal! gg")
+                    local reading_view = child.fn.winsaveview()
+                    child.lua("animation:_render_frame(animation._epoch)")
+                    assert.equal(reading_view, child.fn.winsaveview())
+                    assert.is_false(
+                        child.lua_get("hint_visible(...)", { state })
+                    )
+
+                    child.cmd("normal! G")
+                    child.lua("animation:_render_frame(animation._epoch)")
+                    assert.is_true(
+                        child.lua_get("hint_visible(...)", { state })
+                    )
+                    assert.equal(100, child.fn.line("."))
+                    assert.equal(case.last_line, child.fn.getline("$"))
+
+                    local bottom_view = child.fn.winsaveview()
+                    child.lua("animation:_render_frame(animation._epoch)")
+                    assert.equal(bottom_view, child.fn.winsaveview())
+                end
+            )
+        end
+
+        it(
+            "reveals a background hint without changing the active window",
+            function()
+                child.lua([[
+                animation:start("generating")
+                vim.cmd("normal! G0zb")
+                vim.cmd("normal! gg")
+                vim.cmd("normal! G")
+                vim.cmd("tabnew")
+            ]])
+                local current_win = child.api.nvim_get_current_win()
+                local current_tab = child.api.nvim_get_current_tabpage()
+
+                child.lua("animation:_render_frame(animation._epoch)")
+
+                assert.equal(current_win, child.api.nvim_get_current_win())
+                assert.equal(current_tab, child.api.nvim_get_current_tabpage())
+                child.cmd("tabprevious")
+                assert.is_true(child.lua_get([[hint_visible("generating")]]))
+            end
+        )
     end)
 end)

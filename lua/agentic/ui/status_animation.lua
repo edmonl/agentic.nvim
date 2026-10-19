@@ -75,6 +75,30 @@ function StatusAnimation:stop()
     self._extmark_id = nil
 end
 
+--- @param winid integer
+--- @param line_count integer
+function StatusAnimation:_reveal_at_bottom(winid, line_count)
+    if vim.api.nvim_win_get_cursor(winid)[1] ~= line_count then
+        return
+    end
+
+    vim.api.nvim_win_call(winid, function()
+        local height = vim.api.nvim_win_text_height(winid, {
+            start_row = line_count - 1,
+            start_vcol = vim.fn.virtcol(".") - 1,
+        })
+
+        -- Returning to EOF can leave the virtual lines below it offscreen.
+        if
+            type(height) == "table"
+            and vim.fn.winline() - 1 + height.all
+                > vim.api.nvim_win_get_height(winid)
+        then
+            vim.cmd("noautocmd normal! zb")
+        end
+    end)
+end
+
 --- @param epoch number Epoch this frame was scheduled with
 function StatusAnimation:_render_frame(epoch)
     if epoch ~= self._epoch then
@@ -125,6 +149,10 @@ function StatusAnimation:_render_frame(epoch)
             virt_lines = virt_lines,
             virt_lines_above = false,
         })
+
+    if winid then
+        self:_reveal_at_bottom(winid, #lines)
+    end
 
     self._next_frame_handle = vim.defer_fn(function()
         self:_render_frame(epoch)
